@@ -1,17 +1,17 @@
-# bins
-tests/response_parser
-config_reader.sh
+# Build files
 httpd
-
-# dir
-test_game
-
-# trashfiles
 *.o
 
+# Generated reports and runtime files
+*.log
+*.pid
+compile_commands.json
 
-# Python
+# Python files
 .venv/
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# macOS files
+.DS_Store

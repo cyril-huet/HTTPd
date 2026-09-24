@@ -46,6 +46,10 @@ test: check
 format:
 	find src tests -type f \( -name "*.h" -o -name "*.c" \) -exec clang-format -i {} +
 
+# Check the formatting without changing files
+check-format:
+	clang-format --dry-run -Werror $$(find src tests -type f \( -name "*.h" -o -name "*.c" \))
+
 # Remove object files
 clean:
 	$(RM) $(OBJ)
@@ -57,4 +61,4 @@ fclean: clean
 # Rebuild the project
 re: fclean all
 
-.PHONY: all check test clean fclean re
+.PHONY: all check test format check-format clean fclean re
