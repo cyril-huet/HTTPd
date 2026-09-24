@@ -1,19 +1,76 @@
 #define _POSIX_C_SOURCE 200809L
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 
 #include "config/config.h"
 #include "daemon/daemon.h"
-#include "logger/logger.h"
 #include "server/server.h"
 
-static void auxi(int a)
+/* The signal interrupts accept(), which lets the server stop cleanly. */
+static void handle_interrupt(int signal_number)
 {
-    if (a)
+    if (signal_number != SIGINT)
     {
+        return;
     }
+}
+
+static int install_signal_handler(void)
+{
+    struct sigaction action;
+
+    action.sa_handler = handle_interrupt;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+
+    return sigaction(SIGINT, &action, NULL);
+}
+
+static void close_standard_streams(void)
+{
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+}
+
+static int start_daemon(struct config *config)
+{
+    int status = 0;
+
+    if (config->daemon == START)
+    {
+        status = daemon_start(config);
+    }
+    else if (config->daemon == RESTART)
+    {
+        status = daemon_restart(config);
+    }
+
+    if (status < 0)
+    {
+        return -1;
+    }
+
+    if (config->daemon == START || config->daemon == RESTART)
+    {
+        close_standard_streams();
+    }
+
+    return 0;
+}
+
+static int stop_daemon(struct config *config)
+{
+    int status = daemon_stop(config);
+    config_destroy(config);
+
+    if (status < 0)
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -23,61 +80,30 @@ int main(int argc, char *argv[])
     {
         return 2;
     }
-    if (config->daemon == START)
+
+    if (config->daemon == STOP)
     {
-        int temps = daemon_start(config);
-        if (temps < 0)
-        {
-            return 1;
-        }
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+        return stop_daemon(config);
     }
-    else if (config->daemon == STOP)
-    {
-        int temps = daemon_stop(config);
-        config_destroy(config);
-        if (temps < 0)
-        {
-            return 1;
-        }
-        return 0;
-    }
-    else if (config->daemon == RESTART)
-    {
-        int temps = daemon_restart(config);
-        if (temps < 0)
-        {
-            return 1;
-        }
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
-    }
-    struct sigaction sigactio;
-    sigactio.sa_handler = auxi;
-    sigemptyset(&sigactio.sa_mask);
-    sigactio.sa_flags = 0;
-    sigaction(SIGINT, &sigactio, NULL);
-    struct logger *logger = init_logger(config);
-    if (logger == NULL && config->log == true)
+
+    if (start_daemon(config) < 0 || install_signal_handler() < 0)
     {
         config_destroy(config);
         return 1;
     }
-    int sockfd = init_server(config->servers->ip, config->servers->port);
-    if (sockfd < 0)
+
+    int server_socket = init_server(config->servers->ip, config->servers->port);
+    if (server_socket < 0)
     {
-        log_close(logger);
         config_destroy(config);
         return 1;
     }
-    printf("Serveur lance sur http://%s:%s\n", config->servers->ip,
+
+    printf("Server started on http://%s:%s\n", config->servers->ip,
            config->servers->port);
-    run_server(sockfd, config);
-    close(sockfd);
-    log_close(logger);
+    run_server(server_socket, config);
+
+    close(server_socket);
     config_destroy(config);
     return 0;
 }
