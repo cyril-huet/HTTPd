@@ -1,110 +1,190 @@
 #include "request_headers.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "http_structs.h"
 
-static size_t find_line_end(char *buffer, size_t size, size_t pos)
+static int find_line_end(const char *buffer, size_t size, size_t start,
+                         size_t *line_end)
 {
-    while (pos + 1 < size && !(buffer[pos] == '\r' && buffer[pos + 1] == '\n'))
+    for (size_t index = start; index + 1 < size; index++)
     {
-        pos++;
+        if (buffer[index] == '\r' && buffer[index + 1] == '\n')
+        {
+            *line_end = index;
+            return 0;
+        }
     }
-    return pos;
+
+    return -1;
 }
 
-static char *extract_name(char *buffer, size_t start, size_t before_colon)
+static char lowercase(char character)
 {
-    char *name = malloc(sizeof(char) * (before_colon + 1));
-    if (name == NULL)
+    if (character >= 'A' && character <= 'Z')
+    {
+        return character + ('a' - 'A');
+    }
+
+    return character;
+}
+
+static int name_equals(const char *buffer, size_t start, size_t end,
+                       const char *expected)
+{
+    size_t expected_length = strlen(expected);
+    if (end - start != expected_length)
+    {
+        return 0;
+    }
+
+    for (size_t index = 0; index < expected_length; index++)
+    {
+        if (lowercase(buffer[start + index]) != expected[index])
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static char *copy_value(const char *buffer, size_t start, size_t end)
+{
+    size_t length = end - start;
+    char *value = malloc(length + 1);
+    if (value == NULL)
     {
         return NULL;
     }
 
-    size_t index = 0;
-    while (index < before_colon)
+    for (size_t index = 0; index < length; index++)
     {
-        name[index] = buffer[start + index];
-        index++;
+        value[index] = buffer[start + index];
     }
-    name[index] = '\0';
-    return name;
+
+    value[length] = '\0';
+    return value;
 }
 
-static char *extract_value(char *buffer, size_t size, size_t start_value,
-                           size_t *size_res)
+static int parse_host(struct request_http *request, const char *buffer,
+                      size_t start, size_t end)
 {
-    if (buffer[start_value] == ' ')
-    {
-        start_value++;
-    }
-
-    *size_res = 0;
-    while (start_value + *size_res < size
-           && buffer[start_value + *size_res] != '\r')
-    {
-        (*size_res)++;
-    }
-
-    char *res = malloc(sizeof(char) * (*size_res + 1));
-    if (res == NULL)
-    {
-        return NULL;
-    }
-
-    for (size_t i = 0; i < *size_res; i++)
-    {
-        res[i] = buffer[start_value + i];
-    }
-
-    res[*size_res] = '\0';
-    return res;
-}
-
-static int parse_host(struct request_http *request, char *buffer, size_t size,
-                      size_t start_value)
-{
-    size_t size_res = 0;
-
-    char *res_host = extract_value(buffer, size, start_value, &size_res);
-    if (res_host == NULL)
+    if (start == end || request->host != NULL)
     {
         return -1;
     }
 
-    request->host = res_host;
+    request->host = copy_value(buffer, start, end);
+    if (request->host == NULL)
+    {
+        return -1;
+    }
 
     return 0;
 }
 
-static int parse_content_length(struct request_http *request, char *buffer,
-                                size_t size, size_t start_value)
+static int parse_length_value(const char *buffer, size_t start, size_t end,
+                              size_t *result)
 {
-    size_t size_res = 0;
-
-    char *res_content = extract_value(buffer, size, start_value, &size_res);
-    if (res_content == NULL)
+    if (start == end)
     {
         return -1;
     }
 
-    size_t size_content_length = 0;
-
-    for (size_t i = 0; i < size_res; i++)
+    *result = 0;
+    for (size_t index = start; index < end; index++)
     {
-        if (res_content[i] < '0' || res_content[i] > '9')
+        if (buffer[index] < '0' || buffer[index] > '9')
         {
-            continue;
+            return -1;
         }
 
-        size_content_length = size_content_length * 10 + (res_content[i] - '0');
+        size_t digit = buffer[index] - '0';
+        if (*result > (SIZE_MAX - digit) / 10)
+        {
+            return -1;
+        }
+
+        *result = *result * 10 + digit;
     }
 
-    request->content_length = size_content_length;
-    request->flag_content = 1;
+    return 0;
+}
 
-    free(res_content);
+static int parse_content_length(struct request_http *request,
+                                const char *buffer, size_t start, size_t end)
+{
+    if (request->flag_content == 1)
+    {
+        return -1;
+    }
+
+    if (parse_length_value(buffer, start, end, &request->content_length) < 0)
+    {
+        return -1;
+    }
+
+    request->flag_content = 1;
+    return 0;
+}
+
+static void trim_value(const char *buffer, size_t *start, size_t *end)
+{
+    while (*start < *end && (buffer[*start] == ' ' || buffer[*start] == '\t'))
+    {
+        (*start)++;
+    }
+
+    while (*end > *start
+           && (buffer[*end - 1] == ' ' || buffer[*end - 1] == '\t'))
+    {
+        (*end)--;
+    }
+}
+
+static int parse_header(struct request_http *request, const char *buffer,
+                        size_t start, size_t end)
+{
+    size_t colon = start;
+    while (colon < end && buffer[colon] != ':')
+    {
+        colon++;
+    }
+
+    if (colon == start || colon == end)
+    {
+        return -1;
+    }
+
+    size_t value_start = colon + 1;
+    size_t value_end = end;
+    trim_value(buffer, &value_start, &value_end);
+
+    if (name_equals(buffer, start, colon, "host") == 1)
+    {
+        return parse_host(request, buffer, value_start, value_end);
+    }
+
+    if (name_equals(buffer, start, colon, "content-length") == 1)
+    {
+        return parse_content_length(request, buffer, value_start, value_end);
+    }
+
+    return 0;
+}
+
+static int find_headers_start(const char *buffer, size_t size, size_t *start)
+{
+    size_t line_end = 0;
+    if (find_line_end(buffer, size, 0, &line_end) < 0)
+    {
+        return -1;
+    }
+
+    *start = line_end + 2;
     return 0;
 }
 
@@ -112,77 +192,31 @@ int headers_request_parse(struct request_http *request, char *buffer,
                           size_t size)
 {
     size_t start = 0;
-
-    while (start + 1 < size
-           && !(buffer[start] == '\r' && buffer[start + 1] == '\n'))
+    if (find_headers_start(buffer, size, &start) < 0)
     {
-        start++;
+        return -1;
     }
-    start += 2;
 
-    int found = 0;
-
-    while (start < size && found != 2)
+    while (start + 1 < size)
     {
-        size_t before_colon = 0;
-
-        while (start + before_colon < size
-               && buffer[start + before_colon] != ':'
-               && buffer[start + before_colon] != '\r')
-        {
-            before_colon++;
-        }
-
         if (buffer[start] == '\r' && buffer[start + 1] == '\n')
         {
-            break;
+            return 0;
         }
 
-        char *name = extract_name(buffer, start, before_colon);
-        if (name == NULL)
+        size_t line_end = 0;
+        if (find_line_end(buffer, size, start, &line_end) < 0)
         {
             return -1;
         }
 
-        if (strcmp(name, "Host") == 0)
+        if (parse_header(request, buffer, start, line_end) < 0)
         {
-            size_t start_value = start + before_colon + 1;
-            if (buffer[start_value] == ' ')
-            {
-                start_value++;
-            }
-
-            if (parse_host(request, buffer, size, start_value) == -1)
-            {
-                free(name);
-                return -1;
-            }
-
-            found++;
+            return -1;
         }
 
-        if (strcmp(name, "Content-Length") == 0)
-        {
-            size_t start_value = start + before_colon + 1;
-            if (buffer[start_value] == ' ')
-            {
-                start_value++;
-            }
-
-            if (parse_content_length(request, buffer, size, start_value) == -1)
-            {
-                free(name);
-                return -1;
-            }
-
-            found++;
-        }
-
-        free(name);
-
-        size_t temps = find_line_end(buffer, size, start);
-        start = temps + 2;
+        start = line_end + 2;
     }
 
-    return 0;
+    return -1;
 }
