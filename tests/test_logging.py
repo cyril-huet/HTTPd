@@ -1,33 +1,114 @@
-import subprocess, os, time
+from framework import send_raw_request
+from framework import start_server
+from framework import stop_server
 
 
-def cleanup():
-    if os.path.exists("log.txt"):
-        os.remove("log.txt")
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/lg.pid"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if os.path.exists("/tmp/lg.pid"):
-        os.remove("/tmp/lg.pid")
+def write_file(path, content):
+    with open(path, "w", encoding="utf-8") as file:
+        file.write(content)
 
-def test_no_logging():
-    cleanup()
-    r = subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/lg.pid","--server_name","t1","--port","9001","--ip","127.0.0.1","--root_dir",".","--log","false"])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/lg.pid"])
-    assert not os.path.exists("log.txt")
 
-def test_no_logging_2():
-    cleanup()
-    r = subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/lg.pid","--server_name","t2","--port","9002","--ip","127.0.0.1","--root_dir",".","--log","false"])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/lg.pid"])
-    assert not os.path.exists("log.txt")
+def test_logging_disabled(tmp_path):
+    log_file = tmp_path / "disabled.log"
+    write_file(tmp_path / "index.html", "Home")
 
-def test_no_log_file():
-    cleanup()
-    r = subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/lg.pid","--server_name","t3","--port","9003","--ip","127.0.0.1","--root_dir",".","--log","true"])
-    assert r.returncode == 2
+    server = start_server(
+        port=8301,
+        root=str(tmp_path),
+        extra_arguments=[
+            "--log", "false",
+            "--log_file", str(log_file),
+        ],
+    )
 
-def test_with_logs_file():
-    cleanup()
-    r = subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/lg.pid","--server_name","t4","--port","9004","--ip","127.0.0.1","--root_dir",".","--log","true","--log_file","log.txt"])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/lg.pid"])
-    assert os.path.exists("log.txt")
+    try:
+        send_raw_request(
+            8301,
+            "GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
 
+    assert not log_file.exists()
+
+
+def test_request_and_response_are_logged(tmp_path):
+    log_file = tmp_path / "httpd.log"
+    write_file(tmp_path / "index.html", "Home")
+
+    server = start_server(
+        port=8302,
+        root=str(tmp_path),
+        extra_arguments=[
+            "--log", "true",
+            "--log_file", str(log_file),
+        ],
+    )
+
+    try:
+        response = send_raw_request(
+            8302,
+            "GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    content = log_file.read_text(encoding="utf-8")
+
+    assert response.startswith("HTTP/1.1 200")
+    assert "[test] received GET on '/' from 127.0.0.1" in content
+    assert "[test] responding with 200" in content
+
+
+def test_not_found_response_is_logged(tmp_path):
+    log_file = tmp_path / "not-found.log"
+
+    server = start_server(
+        port=8303,
+        root=str(tmp_path),
+        extra_arguments=[
+            "--log", "true",
+            "--log_file", str(log_file),
+        ],
+    )
+
+    try:
+        response = send_raw_request(
+            8303,
+            "GET /missing.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    content = log_file.read_text(encoding="utf-8")
+
+    assert response.startswith("HTTP/1.1 404")
+    assert "received GET on '/missing.txt'" in content
+    assert "responding with 404" in content
+
+
+def test_bad_request_is_logged(tmp_path):
+    log_file = tmp_path / "bad-request.log"
+
+    server = start_server(
+        port=8304,
+        root=str(tmp_path),
+        extra_arguments=[
+            "--log", "true",
+            "--log_file", str(log_file),
+        ],
+    )
+
+    try:
+        response = send_raw_request(
+            8304,
+            "GET / HTTP/1.1\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    content = log_file.read_text(encoding="utf-8")
+
+    assert response.startswith("HTTP/1.1 400")
+    assert "Bad Request from 127.0.0.1" in content
+    assert "responding with 400" in content

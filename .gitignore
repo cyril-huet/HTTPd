@@ -1,7 +1,6 @@
 # bins
 tests/response_parser
 config_reader.sh
-littlegame.tar.gz
 httpd
 
 # dir
@@ -10,3 +9,10 @@ test_game
 # trashfiles
 *.o
 .clang-format
+
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc

@@ -1,71 +1,199 @@
-import subprocess , os , time
+import os
+import subprocess
+import time
 
-def cleanup():
-    if os.path.exists("/tmp/HTTPd.pid"):
-        os.remove("/tmp/HTTPd.pid")
 
-def pid_is_empty():
-    return not os.path.exists("/tmp/HTTPd.pid") or open("/tmp/HTTPd.pid").read().strip() == ""
+def run_daemon(action, pid_file, port=None, root=None):
+    command = [
+        "./httpd",
+        "--daemon", action,
+        "--pid_file", str(pid_file),
+    ]
 
-def test_start():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d1","--port","8300","--ip","127.0.0.1","--root_dir","."])
-    assert not pid_is_empty()
+    if action == "start" or action == "restart":
+        command.extend([
+            "--server_name", "daemon-test",
+            "--port", str(port),
+            "--ip", "127.0.0.1",
+            "--root_dir", str(root),
+            "--log", "false",
+        ])
 
-def test_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d2","--port","8301","--ip","127.0.0.1","--root_dir","."])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    assert pid_is_empty()
+    return subprocess.run(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=2,
+    )
 
-def test_restart():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d3","--port","8302","--ip","127.0.0.1","--root_dir","."])
-    old = open("/tmp/HTTPd.pid").read().strip()
-    subprocess.run(["./httpd","--daemon","restart","--pid_file","/tmp/HTTPd.pid","--server_name","d3","--port","8302","--ip","127.0.0.1","--root_dir","."])
-    new = open("/tmp/HTTPd.pid").read().strip()
-    assert old != new
 
-def test_start_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d4","--port","8303","--ip","127.0.0.1","--root_dir","."])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    assert pid_is_empty()
+def read_pid(pid_file):
+    if not pid_file.exists():
+        return None
 
-def test_start_stop_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d5","--port","8304","--ip","127.0.0.1","--root_dir","."])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    r = subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    assert r.returncode == 0
-    assert pid_is_empty()
+    content = pid_file.read_text(encoding="utf-8").strip()
 
-def test_start_start_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d6","--port","8305","--ip","127.0.0.1","--root_dir","."])
-    r = subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid"])
-    assert r.returncode == 1
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    assert pid_is_empty()
+    if content == "":
+        return None
 
-def test_start_req_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d7","--port","8306","--ip","127.0.0.1","--root_dir","."])
-    subprocess.run(["./httpd","--daemon","stop","--pid_file","/tmp/HTTPd.pid"])
-    assert pid_is_empty()
+    return int(content)
 
-def test_restart_req_stop():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","start","--pid_file","/tmp/HTTPd.pid","--server_name","d8","--port","8307","--ip","127.0.0.1","--root_dir","."])
-    subprocess.run(["./httpd","--daemon","restart","--pid_file","/tmp/HTTPd.pid","--server_name","d8","--port","8307","--ip","127.0.0.1","--root_dir","."])
-    assert not pid_is_empty()
 
-def test_restart_same():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","restart","--pid_file","/tmp/HTTPd.pid","--server_name","d9","--port","8308","--ip","127.0.0.1","--root_dir","."])
-    assert not pid_is_empty()
+def wait_for_pid(pid_file):
+    for _ in range(100):
+        pid = read_pid(pid_file)
 
-def test_restart_different():
-    cleanup()
-    subprocess.run(["./httpd","--daemon","restart","--pid_file","/tmp/HTTPd.pid","--server_name","d10","--port","8310","--ip","127.0.0.1","--root_dir","."])
-    assert not pid_is_empty()
+        if pid is not None:
+            return pid
+
+        time.sleep(0.02)
+
+    raise RuntimeError("The daemon did not write its PID")
+
+
+def wait_for_new_pid(pid_file, old_pid):
+    for _ in range(100):
+        pid = read_pid(pid_file)
+
+        if pid is not None and pid != old_pid:
+            return pid
+
+        time.sleep(0.02)
+
+    raise RuntimeError("The daemon did not restart")
+
+
+def process_is_running(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+    return True
+
+
+def wait_for_process_stop(pid):
+    for _ in range(100):
+        if not process_is_running(pid):
+            return
+
+        time.sleep(0.02)
+
+    raise RuntimeError("The daemon did not stop")
+
+
+def stop_daemon(pid_file):
+    pid = read_pid(pid_file)
+
+    run_daemon("stop", pid_file)
+
+    if pid is not None:
+        wait_for_process_stop(pid)
+
+
+def cleanup_daemon(pid_file):
+    stop_daemon(pid_file)
+
+    if pid_file.exists():
+        pid_file.unlink()
+
+
+def test_daemon_start(tmp_path):
+    pid_file = tmp_path / "start.pid"
+
+    try:
+        result = run_daemon(
+            "start",
+            pid_file,
+            port=8401,
+            root=tmp_path,
+        )
+
+        pid = wait_for_pid(pid_file)
+
+        assert result.returncode == 0
+        assert process_is_running(pid)
+    finally:
+        cleanup_daemon(pid_file)
+
+
+def test_daemon_stop(tmp_path):
+    pid_file = tmp_path / "stop.pid"
+
+    try:
+        run_daemon(
+            "start",
+            pid_file,
+            port=8402,
+            root=tmp_path,
+        )
+
+        pid = wait_for_pid(pid_file)
+        result = run_daemon("stop", pid_file)
+
+        wait_for_process_stop(pid)
+
+        assert result.returncode == 0
+        assert read_pid(pid_file) is None
+    finally:
+        cleanup_daemon(pid_file)
+
+
+def test_daemon_restart(tmp_path):
+    pid_file = tmp_path / "restart.pid"
+
+    try:
+        run_daemon(
+            "start",
+            pid_file,
+            port=8403,
+            root=tmp_path,
+        )
+
+        old_pid = wait_for_pid(pid_file)
+
+        result = run_daemon(
+            "restart",
+            pid_file,
+            port=8403,
+            root=tmp_path,
+        )
+
+        new_pid = wait_for_new_pid(pid_file, old_pid)
+        wait_for_process_stop(old_pid)
+
+        assert result.returncode == 0
+        assert new_pid != old_pid
+        assert process_is_running(new_pid)
+    finally:
+        cleanup_daemon(pid_file)
+
+
+def test_restart_without_running_daemon(tmp_path):
+    pid_file = tmp_path / "restart-empty.pid"
+
+    try:
+        result = run_daemon(
+            "restart",
+            pid_file,
+            port=8404,
+            root=tmp_path,
+        )
+
+        pid = wait_for_pid(pid_file)
+
+        assert result.returncode == 0
+        assert process_is_running(pid)
+    finally:
+        cleanup_daemon(pid_file)
+
+
+def test_stop_without_running_daemon(tmp_path):
+    pid_file = tmp_path / "stop-empty.pid"
+
+    result = run_daemon("stop", pid_file)
+
+    assert result.returncode == 0
+    assert read_pid(pid_file) is None

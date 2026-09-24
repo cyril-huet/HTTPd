@@ -1,88 +1,132 @@
-from framework import start_server , stop_server , send_raw_request
-import os
+from framework import send_raw_request
+from framework import start_server
+from framework import stop_server
 
-def get_length(resp):
-    headers = resp.split("\r\n\r\n", 1)[0]
+
+def write_file(path, content):
+    with open(path, "w", encoding="utf-8") as file:
+        file.write(content)
+
+
+def get_content_length(response):
+    headers = response.split("\r\n\r\n", 1)[0]
+
     for line in headers.split("\r\n"):
-        if line.lower().startswith("content-length"):
-            valeur = line.split(":", 1)[1].strip()
-            return int(valeur)
+        if line.lower().startswith("content-length:"):
+            value = line.split(":", 1)[1].strip()
+            return int(value)
+
     return None
 
 
-def test_basic():
-    body = "42"
-    open("index.html","w").write(body)
-    p = start_server(root=".")
-    resp = send_raw_request(8081 , "GET / HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
+def get_body(response):
+    parts = response.split("\r\n\r\n", 1)
 
-    assert resp.startswith("HTTP/1.1 200")
-    assert get_length(resp) == len(body)
+    if len(parts) == 2:
+        return parts[1]
+
+    return ""
 
 
-def test_basic_folder():
-    os.makedirs("folder", exist_ok=True)
-    body = "42"*15
-    open("folder/index.html","w").write(body)
+def test_get_default_file(tmp_path):
+    body = "Hello from HTTPd!"
+    write_file(tmp_path / "index.html", body)
 
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"GET /folder/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
+    server = start_server(port=8181, root=str(tmp_path))
 
-    assert resp.startswith("HTTP/1.1 200")
-    assert get_length(resp) == len(body)
+    try:
+        response = send_raw_request(
+            8181,
+            "GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
 
-
-
-
-
-def test_default_folder():
-    os.makedirs("4242", exist_ok=True)
-    body = "42424242"*20
-    open("abc/index.html","w").write(body)
-
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"GET /abc/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-
-    assert resp.startswith("HTTP/1.1 200")
-    assert get_length(resp) == len(body)
-
-def test_head_root():
-    body = "42Httpd"
-    open("index.html", "w").write(body)
-
-    p = start_server(root=".")
-    resp = send_raw_request(8081,'HEAD / HTTP/1.1\r\nHost: test\r\n\r\n')
-    stop_server(p)
-
-    assert resp.startswith("HTTP/1.1 200")
-    assert body not in resp 
-    assert get_length(resp) == len(body)
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == body
 
 
-def test_head_folder():
-    os.makedirs("www", exist_ok=True)
-    open("www/index.html", "w").write("424242")
+def test_get_default_file_from_directory(tmp_path):
+    directory = tmp_path / "folder"
+    directory.mkdir()
 
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"HEAD /www/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
+    body = "File inside a directory"
+    write_file(directory / "index.html", body)
 
-    assert resp.startswith("HTTP/1.1 200")
-    assert "424242" not in resp
-    assert get_length(resp) == 6
+    server = start_server(port=8182, root=str(tmp_path))
+
+    try:
+        response = send_raw_request(
+            8182,
+            "GET /folder/ HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == body
 
 
-def test_head_final():
-    os.makedirs("epita", exist_ok=True)
-    open("epita/42.html", "w").write("abcd")
+def test_custom_default_file(tmp_path):
+    body = "Custom home page"
+    write_file(tmp_path / "home.html", body)
 
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"HEAD /epita/42.html HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
+    server = start_server(
+        port=8183,
+        root=str(tmp_path),
+        extra_arguments=["--default_file", "home.html"],
+    )
 
-    assert resp.startswith("HTTP/1.1 200")
-    assert "abcd" not in resp
-    assert get_length(resp) == 4
+    try:
+        response = send_raw_request(
+            8183,
+            "GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_body(response) == body
+
+
+def test_head_default_file(tmp_path):
+    body = "This body must not be returned"
+    write_file(tmp_path / "index.html", body)
+
+    server = start_server(port=8184, root=str(tmp_path))
+
+    try:
+        response = send_raw_request(
+            8184,
+            "HEAD / HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == ""
+
+
+def test_head_default_file_from_directory(tmp_path):
+    directory = tmp_path / "documents"
+    directory.mkdir()
+
+    body = "Document index"
+    write_file(directory / "index.html", body)
+
+    server = start_server(port=8185, root=str(tmp_path))
+
+    try:
+        response = send_raw_request(
+            8185,
+            "HEAD /documents/ HTTP/1.1\r\nHost: test\r\n\r\n",
+        )
+    finally:
+        stop_server(server)
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == ""

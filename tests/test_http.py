@@ -1,173 +1,200 @@
-import os
-from framework import start_server, stop_server, send_raw_request
+from framework import send_raw_request
+from framework import start_server
+from framework import stop_server
 
-def get_length(resp):
-    headers = resp.split("\r\n\r\n", 1)[0]
+
+def write_file(path, content):
+    with open(path, "w", encoding="utf-8") as file:
+        file.write(content)
+
+
+def get_content_length(response):
+    headers = response.split("\r\n\r\n", 1)[0]
+
     for line in headers.split("\r\n"):
-        if line.lower().startswith("content-length"):
-            valeur = line.split(":", 1)[1].strip()
-            return int(valeur)
+        if line.lower().startswith("content-length:"):
+            value = line.split(":", 1)[1].strip()
+            return int(value)
+
     return None
 
 
-def test_basic():
-    body = "42"
-    open("index.html","w").write(body)
-    p = start_server(root=".")
-    resp = send_raw_request(8081 , "GET / HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
+def get_body(response):
+    parts = response.split("\r\n\r\n", 1)
 
-    assert resp.startswith("HTTP/1.1 200")
-    assert get_length(resp) == len(body)
+    if len(parts) == 2:
+        return parts[1]
 
-def test_get_root_basic():
-    open("index.html", "w").write("hello epita")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET / HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "hello epita" in resp
+    return ""
 
 
-def test_missing_file():
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET /nofile HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 404")
+def request_server(port, root, request):
+    server = start_server(port=port, root=str(root))
+
+    try:
+        response = send_raw_request(port, request)
+    finally:
+        stop_server(server)
+
+    return response
 
 
-def test_get_folder():
-    os.makedirs("epita42", exist_ok=True)
-    open("epita42/index.html", "w").write("Hello World")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET /z/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "Hello World" in resp
+def test_get_file(tmp_path):
+    body = "Hello from a file"
+    write_file(tmp_path / "hello.txt", body)
+
+    response = request_server(
+        8201,
+        tmp_path,
+        "GET /hello.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == body
 
 
-def test_get_file():
-    os.makedirs("a", exist_ok=True)
-    open("a/t.txt", "w").write("abc")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET /a/t.txt HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "abc" in resp
+def test_get_nested_file(tmp_path):
+    directory = tmp_path / "documents"
+    directory.mkdir()
 
-def test_get_emtpy():
-    os.makedirs("empty", exist_ok=True)
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET /empty/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 404")
+    write_file(directory / "notes.txt", "HTTP notes")
 
-def test_head_root():
-    open("index.html", "w").write("ppex3")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "HEAD / HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "ppex3" not in resp
-    assert get_length(resp) == 3
+    response = request_server(
+        8202,
+        tmp_path,
+        "GET /documents/notes.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_body(response) == "HTTP notes"
 
 
-def test_head_file():
-    open("epita.html", "w").write("12345")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "HEAD /epita.html HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "12345" not in resp
-    assert get_length(resp) == 5
+def test_missing_file(tmp_path):
+    response = request_server(
+        8203,
+        tmp_path,
+        "GET /missing.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 404")
 
 
-def test_head_missing():
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "HEAD /nofile HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 404")
+def test_directory_without_default_file(tmp_path):
+    directory = tmp_path / "empty"
+    directory.mkdir()
+
+    response = request_server(
+        8204,
+        tmp_path,
+        "GET /empty/ HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 404")
 
 
-def test_head_folder_default():
-    os.makedirs("head", exist_ok=True)
-    open("head/index.html", "w").write("ok")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "HEAD /h/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 200")
-    assert "ok" not in resp
-    assert get_length(resp) == 2
+def test_head_file(tmp_path):
+    body = "12345"
+    write_file(tmp_path / "file.txt", body)
+
+    response = request_server(
+        8205,
+        tmp_path,
+        "HEAD /file.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 200")
+    assert get_content_length(response) == len(body)
+    assert get_body(response) == ""
 
 
-def test_head_folder_missing_default():
-    os.makedirs("n", exist_ok=True)
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "HEAD /n/ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 404")
+def test_head_missing_file(tmp_path):
+    response = request_server(
+        8206,
+        tmp_path,
+        "HEAD /missing.txt HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 404")
 
 
-def test_missing_host_header():
-    open("index.html", "w").write("a")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET / HTTP/1.1\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 400")
+def test_missing_host_header(tmp_path):
+    write_file(tmp_path / "index.html", "Home")
+
+    response = request_server(
+        8207,
+        tmp_path,
+        "GET / HTTP/1.1\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 400")
 
 
-def test_bad_http():
-    open("index.html", "w").write("a")
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET / HTTP/2.0\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 505")
+def test_unsupported_http_version(tmp_path):
+    response = request_server(
+        8208,
+        tmp_path,
+        "GET / HTTP/2.0\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 505")
 
 
-def test_method_not_allowed():
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "EPITA / HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 405")
+def test_method_not_allowed(tmp_path):
+    response = request_server(
+        8209,
+        tmp_path,
+        "POST / HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 405")
 
 
-def test_forbidden():
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "GET /../ HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 403")
+def test_parent_directory_is_forbidden(tmp_path):
+    response = request_server(
+        8210,
+        tmp_path,
+        "GET /../ HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 403")
 
 
-def test_forbidden_file():
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"GET /../../etc/passwd HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 403")
+def test_file_outside_root_is_forbidden(tmp_path):
+    response = request_server(
+        8211,
+        tmp_path,
+        "GET /../../etc/passwd HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 403")
 
 
-def test_double_slash_path():
-    open("index.html", "w").write("ok")
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"GET // HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1")
+def test_spaces_in_path(tmp_path):
+    response = request_server(
+        8212,
+        tmp_path,
+        "GET /hello world HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 400")
 
 
-def test_spaces_in_path():
-    p = start_server(root=".")
-    resp = send_raw_request(8081,"GET /a b HTTP/1.1\r\nHost: test\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 400")
+def test_missing_method(tmp_path):
+    response = request_server(
+        8213,
+        tmp_path,
+        "/ HTTP/1.1\r\nHost: test\r\n\r\n",
+    )
 
-def test_no_method():
-    p = start_server(root=".")
-    resp = send_raw_request(8081,  "/ HTTP/1.1\r\nHost: test\r\n\r\n" )
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 400")
+    assert response.startswith("HTTP/1.1 400")
 
 
-def test_only_crlf():
-    p = start_server(root=".")
-    resp = send_raw_request(8081, "\r\n\r\n")
-    stop_server(p)
-    assert resp.startswith("HTTP/1.1 400")
+def test_empty_request(tmp_path):
+    response = request_server(
+        8214,
+        tmp_path,
+        "\r\n\r\n",
+    )
+
+    assert response.startswith("HTTP/1.1 400")
