@@ -29,8 +29,8 @@ struct client_context
 
 static int create_server_socket(struct addrinfo *address)
 {
-    int server_socket = socket(address->ai_family, address->ai_socktype,
-                               address->ai_protocol);
+    int server_socket =
+        socket(address->ai_family, address->ai_socktype, address->ai_protocol);
     if (server_socket < 0)
     {
         return -1;
@@ -38,7 +38,8 @@ static int create_server_socket(struct addrinfo *address)
 
     int enabled = 1;
     if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &enabled,
-                   sizeof(enabled)) < 0
+                   sizeof(enabled))
+            < 0
         || bind(server_socket, address->ai_addr, address->ai_addrlen) < 0
         || listen(server_socket, SOMAXCONN) < 0)
     {
@@ -234,8 +235,8 @@ static int accept_client(int server_socket, struct config *config,
 {
     struct sockaddr_in address;
     socklen_t address_size = sizeof(address);
-    int client_socket = accept(server_socket, (struct sockaddr *)&address,
-                               &address_size);
+    int client_socket =
+        accept(server_socket, (struct sockaddr *)&address, &address_size);
 
     if (client_socket < 0)
     {
@@ -261,13 +262,23 @@ static int accept_client(int server_socket, struct config *config,
     return 0;
 }
 
-void run_server(int server_socket, struct config *config)
+int run_server(int server_socket, struct config *config)
 {
+    if (config == NULL)
+    {
+        return -1;
+    }
+
     struct logger *logger = init_logger(config);
+    if (logger == NULL && config->log == true)
+    {
+        return -1;
+    }
 
     while (accept_client(server_socket, config, logger) == 0)
     {
     }
 
     log_close(logger);
+    return 0;
 }
