@@ -6,250 +6,150 @@
 
 #include "http_structs.h"
 
-static char *my_itoa(int value, char *s)
+int len_int(int value)
 {
-    int index = 0;
-    int flag = 0;
-    if (value < 0)
-    {
-        flag = 1;
-        value *= -1;
-    }
-
     if (value == 0)
     {
-        s[index] = '0';
-        index++;
-        s[index] = '\0';
-        return s;
+        return 1;
+    }
+
+    int length = 0;
+    if (value < 0)
+    {
+        length++;
     }
 
     while (value != 0)
     {
-        s[index] = '0' + (value % 10);
+        length++;
         value = value / 10;
-        index++;
-    }
-    if (flag == 1)
-    {
-        s[index] = '-';
-        index++;
-    }
-    size_t index2 = 0;
-    s[index] = '\0';
-    while (s[index2] != '\0')
-    {
-        index2++;
-    }
-    for (size_t i = 0; i < index2 / 2; i++)
-    {
-        char temps = s[i];
-        s[i] = s[index2 - i - 1];
-        s[index2 - i - 1] = temps;
     }
 
-    return s;
+    return length;
 }
 
-int len_int(int a)
+static void number_to_string(size_t value, char *result)
 {
-    if (a == 0)
+    size_t length = 0;
+
+    if (value == 0)
     {
-        return 1;
+        result[0] = '0';
+        result[1] = '\0';
+        return;
     }
-    int res = 0;
-    while (a > 0)
+
+    while (value > 0)
     {
-        res++;
-        a /= 10;
+        result[length] = '0' + (value % 10);
+        value = value / 10;
+        length++;
     }
-    return res;
+
+    result[length] = '\0';
+    for (size_t index = 0; index < length / 2; index++)
+    {
+        char temporary = result[index];
+        result[index] = result[length - index - 1];
+        result[length - index - 1] = temporary;
+    }
 }
 
-static char *str_status_codes(struct answer_http *answer,
-                              size_t len_status_code)
+static void append_text(char *result, size_t *index, const char *text)
 {
-    char *str_status_code = malloc(sizeof(char) * (len_status_code + 1));
-    if (str_status_code == NULL)
+    size_t text_index = 0;
+    while (text[text_index] != '\0')
     {
-        return NULL;
+        result[*index] = text[text_index];
+        (*index)++;
+        text_index++;
     }
-    str_status_code = my_itoa(answer->status_code, str_status_code);
-    return str_status_code;
 }
 
-static char *str_content_lengths(struct answer_http *answer,
-                                 size_t len_content_length)
+static void append_header(char *result, size_t *index, const char *name,
+                          const char *value)
 {
-    char *str_content_length = malloc(sizeof(char) * (len_content_length + 1));
-    if (str_content_length == NULL)
-    {
-        return NULL;
-    }
-    str_content_length = my_itoa(answer->content_length, str_content_length);
-    return str_content_length;
+    append_text(result, index, name);
+    append_text(result, index, ": ");
+    append_text(result, index, value);
+    append_text(result, index, "\r\n");
 }
 
-static size_t len_basic(void)
+static size_t response_length(struct answer_http *answer, const char *status,
+                              const char *content_length)
 {
-    size_t basic_len = strlen("HTTP/1.1 000 OK\r\nDate: \r\nContent-Length: "
-                              "\r\nConnection: close\r\n\r\n");
-    return basic_len;
+    size_t length = strlen(answer->version) + strlen(status);
+    length += strlen(answer->reason_phrase) + strlen(answer->date);
+    length += strlen(content_length);
+    length += strlen("  \r\nDate: \r\nContent-Length: \r\n");
+    length += strlen("Connection: close\r\n\r\n");
+    return length;
 }
 
-static void append_version_and_status(char *res, size_t *index,
-                                      char *str_status_code,
-                                      struct answer_http *answer)
+static void write_response(char *result, struct answer_http *answer,
+                           const char *status, const char *content_length)
 {
-    char *version = "HTTP/1.1 ";
-    for (size_t i = 0; i < strlen(version); i++)
-    {
-        res[*index] = version[i];
-        (*index)++;
-    }
-
-    for (size_t i = 0; i < strlen(str_status_code); i++)
-    {
-        res[*index] = str_status_code[i];
-        (*index)++;
-    }
-
-    res[*index] = ' ';
-    (*index)++;
-
-    for (size_t i = 0; i < strlen(answer->reason_phrase); i++)
-    {
-        res[*index] = answer->reason_phrase[i];
-        (*index)++;
-    }
-
-    res[*index] = '\r';
-    (*index)++;
-    res[*index] = '\n';
-    (*index)++;
+    size_t index = 0;
+    append_text(result, &index, answer->version);
+    append_text(result, &index, " ");
+    append_text(result, &index, status);
+    append_text(result, &index, " ");
+    append_text(result, &index, answer->reason_phrase);
+    append_text(result, &index, "\r\n");
+    append_header(result, &index, "Date", answer->date);
+    append_header(result, &index, "Content-Length", content_length);
+    append_header(result, &index, "Connection", "close");
+    append_text(result, &index, "\r\n");
+    result[index] = '\0';
 }
 
-static void append_date(char *res, size_t *index, struct answer_http *answer)
-{
-    char *date = "Date: ";
-    for (size_t i = 0; i < strlen(date); i++)
-    {
-        res[*index] = date[i];
-        (*index)++;
-    }
-
-    for (size_t i = 0; i < strlen(answer->date); i++)
-    {
-        res[*index] = answer->date[i];
-        (*index)++;
-    }
-
-    res[*index] = '\r';
-    (*index)++;
-    res[*index] = '\n';
-    (*index)++;
-}
-
-static void append_content_length(char *res, size_t *index,
-                                  char *str_content_length)
-{
-    char *content_length = "Content-Length: ";
-    for (size_t i = 0; i < strlen(content_length); i++)
-    {
-        res[*index] = content_length[i];
-        (*index)++;
-    }
-
-    for (size_t i = 0; i < strlen(str_content_length); i++)
-    {
-        res[*index] = str_content_length[i];
-        (*index)++;
-    }
-
-    res[*index] = '\r';
-    (*index)++;
-    res[*index] = '\n';
-    (*index)++;
-}
-
-static void append_connection(char *res, size_t *index)
-{
-    char *connection = "Connection: close";
-    for (size_t i = 0; i < strlen(connection); i++)
-    {
-        res[*index] = connection[i];
-        (*index)++;
-    }
-
-    res[*index] = '\r';
-    (*index)++;
-    res[*index] = '\n';
-    (*index)++;
-
-    res[*index] = '\r';
-    (*index)++;
-    res[*index] = '\n';
-    (*index)++;
-}
 char *answer_http_to_string(struct answer_http *answer)
 {
-    size_t len_status_code = len_int(answer->status_code);
-    size_t len_content_length = len_int(answer->content_length);
-
-    char *str_status_code = str_status_codes(answer, len_status_code);
-    if (str_status_code == NULL)
+    if (answer == NULL || answer->version == NULL
+        || answer->reason_phrase == NULL || answer->date == NULL)
     {
         return NULL;
     }
 
-    char *str_content_length = str_content_lengths(answer, len_content_length);
-    if (str_content_length == NULL)
+    char status[32];
+    char content_length[32];
+    number_to_string(answer->status_code, status);
+    number_to_string(answer->content_length, content_length);
+
+    size_t length = response_length(answer, status, content_length);
+    char *result = malloc(length + 1);
+    if (result == NULL)
     {
         return NULL;
     }
 
-    size_t basic_len = len_basic();
-
-    size_t extra_len = strlen(answer->date) + strlen("close")
-        + strlen(answer->reason_phrase) + strlen(str_status_code)
-        + strlen(str_content_length) + len_status_code + len_content_length;
-
-    char *res = malloc(sizeof(char) * (basic_len + extra_len + 1));
-    if (res == NULL)
-    {
-        free(str_status_code);
-        free(str_content_length);
-        return NULL;
-    }
-
-    size_t index = 0;
-
-    append_version_and_status(res, &index, str_status_code, answer);
-    append_date(res, &index, answer);
-    append_content_length(res, &index, str_content_length);
-    append_connection(res, &index);
-
-    res[index] = '\0';
-
-    free(str_status_code);
-    free(str_content_length);
-
-    return res;
+    write_response(result, answer, status, content_length);
+    return result;
 }
 
 char *date(void)
 {
-    char buf[64];
+    char buffer[64];
     time_t now = time(NULL);
-    struct tm date_time = *gmtime(&now);
-    strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &date_time);
-
-    char *res = malloc(sizeof(char) * (strlen(buf) + 1));
-    if (res == NULL)
+    struct tm *utc_time = gmtime(&now);
+    if (utc_time == NULL)
     {
         return NULL;
     }
 
-    strcpy(res, buf);
-    return res;
+    size_t length =
+        strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S GMT", utc_time);
+    if (length == 0)
+    {
+        return NULL;
+    }
+
+    char *result = malloc(length + 1);
+    if (result == NULL)
+    {
+        return NULL;
+    }
+
+    strcpy(result, buffer);
+    return result;
 }
