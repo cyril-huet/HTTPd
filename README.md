@@ -1,5 +1,7 @@
 # HTTPd
 
+[![CI](https://github.com/cyril-huet/HTTPd/actions/workflows/ci.yml/badge.svg)](https://github.com/cyril-huet/HTTPd/actions/workflows/ci.yml)
+
 A lightweight HTTP/1.1 server written in C.
 
 HTTPd is an educational project built to understand how a web server works: sockets, HTTP request parsing, static file serving, logging and daemon management.
@@ -113,6 +115,12 @@ Run the test suite:
 python3 -m pytest -v
 ```
 
+Check the source formatting:
+
+```bash
+make check-format
+```
+
 The tests cover configuration parsing, HTTP requests, default files, logging and daemon management.
 
 ## Project structure
@@ -129,8 +137,13 @@ The tests cover configuration parsing, HTTP requests, default files, logging and
 │   └── main.c
 ├── tests/          Integration tests
 ├── Makefile
-└── README.md
+├── .clang-format
+└── LICENSE
 ```
+
+## License
+
+This project is available under the MIT License. See [LICENSE](LICENSE).
 
 ## Limitations
 
@@ -140,4 +153,3 @@ HTTPd is an educational server and is not intended for production use.
 * HTTP/1.1 only
 * `GET` and `HEAD` methods only
 * One connection is closed after each response
-
