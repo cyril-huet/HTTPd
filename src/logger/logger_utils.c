@@ -2,93 +2,57 @@
 #include "logger_utils.h"
 
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
-char *to_string(struct string *str)
+char *to_string(const struct string *string)
 {
-    char *res = malloc(sizeof(char) * (str->size + 1));
-    if (res == NULL)
+    if (string == NULL)
     {
         return NULL;
     }
 
-    for (size_t i = 0; i < str->size; i++)
+    char *result = malloc(string->size + 1);
+    if (result == NULL)
     {
-        res[i] = str->data[i];
+        return NULL;
     }
 
-    res[str->size] = '\0';
-    return res;
-}
-
-size_t append(char *dest, char *copie)
-{
-    size_t index = 0;
-    while (copie[index] != '\0')
+    for (size_t index = 0; index < string->size; index++)
     {
-        dest[index] = copie[index];
-        index++;
+        result[index] = string->data[index];
     }
-    return index;
+
+    result[string->size] = '\0';
+    return result;
 }
 
 char *date_log(void)
 {
-    char buf[64];
-    time_t time_null = time(NULL);
-    struct tm date_time = *gmtime(&time_null);
-    strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &date_time);
-    char *res = malloc(sizeof(char) * (strlen(buf) + 1));
-    if (res == NULL)
+    char buffer[64];
+    time_t now = time(NULL);
+    struct tm *utc_time = gmtime(&now);
+    if (utc_time == NULL)
     {
         return NULL;
     }
-    strcpy(res, buf);
-    return res;
-}
 
-char *my_itoa_log(int value, char *s)
-{
-    int index = 0;
-    int flag = 0;
-    if (value < 0)
+    size_t length =
+        strftime(buffer, sizeof(buffer), "%a, %d %b %Y %H:%M:%S GMT", utc_time);
+    if (length == 0)
     {
-        flag = 1;
-        value *= -1;
+        return NULL;
     }
 
-    if (value == 0)
+    char *result = malloc(length + 1);
+    if (result == NULL)
     {
-        s[index] = '0';
-        index++;
-        s[index] = '\0';
-        return s;
+        return NULL;
     }
 
-    while (value != 0)
+    for (size_t index = 0; index <= length; index++)
     {
-        s[index] = '0' + (value % 10);
-        value = value / 10;
-        index++;
-    }
-    if (flag == 1)
-    {
-        s[index] = '-';
-        index++;
-    }
-    size_t index2 = 0;
-    s[index] = '\0';
-    while (s[index2] != '\0')
-    {
-        index2++;
-    }
-    for (size_t i = 0; i < index2 / 2; i++)
-    {
-        char temps = s[i];
-        s[i] = s[index2 - i - 1];
-        s[index2 - i - 1] = temps;
+        result[index] = buffer[index];
     }
 
-    return s;
+    return result;
 }
