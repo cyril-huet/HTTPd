@@ -1,6 +1,11 @@
+#define _XOPEN_SOURCE 700
+
 #include "answer_path.h"
 
+#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -8,99 +13,224 @@
 #include "../config/config.h"
 #include "http_structs.h"
 
-int find_path(struct request_http *request, struct answer_http *answer,
-              struct config *config)
+#ifndef PATH_MAX
+#    define PATH_MAX 4096
+#endif
+
+static int contains_parent_directory(const char *path)
 {
-    int flag = 1;
     size_t index = 0;
-    while (config->servers->root_dir[index] != '\0')
+
+    while (path[index] != '\0')
     {
-        if (config->servers->root_dir[index + 1] == '\0'
-            && config->servers->root_dir[index] == '/')
+        while (path[index] == '/')
         {
-            flag = 0;
+            index++;
         }
-        index++;
+
+        size_t start = index;
+
+        while (path[index] != '\0' && path[index] != '/')
+        {
+            index++;
+        }
+
+        if (index - start == 2 && path[start] == '.' && path[start + 1] == '.')
+        {
+            return 1;
+        }
     }
-    char *res_path = malloc(strlen(config->servers->root_dir)
-                            + strlen(request->path) + flag + 1);
-    if (res_path == NULL)
+
+    return 0;
+}
+
+static int build_path(const char *directory, const char *path, char *result)
+{
+    const char *relative_path = path;
+
+    while (*relative_path == '/')
+    {
+        relative_path++;
+    }
+
+    int written;
+    size_t length = strlen(directory);
+
+    if (length > 0 && directory[length - 1] == '/')
+    {
+        written = snprintf(result, PATH_MAX, "%s%s", directory, relative_path);
+    }
+    else
+    {
+        written = snprintf(result, PATH_MAX, "%s/%s", directory, relative_path);
+    }
+
+    if (written < 0 || written >= PATH_MAX)
     {
         return -1;
     }
-    size_t index_res_path = 0;
-    for (size_t i = 0; i < strlen(config->servers->root_dir); i++)
+
+    return 0;
+}
+
+static int resolve_path(const char *path, char *result)
+{
+    if (realpath(path, result) != NULL)
     {
-        res_path[index_res_path] = config->servers->root_dir[i];
-        index_res_path++;
+        return 200;
     }
-    if (flag == 1)
+
+    if (errno == EACCES)
     {
-        res_path[index_res_path] = '/';
-        index_res_path++;
+        return 403;
     }
-    for (size_t i = 0; i < strlen(request->path); i++)
+
+    return 404;
+}
+
+static int path_is_inside_root(const char *root, const char *path)
+{
+    if (strcmp(root, "/") == 0)
     {
-        res_path[index_res_path] = request->path[i];
-        index_res_path++;
+        return 1;
     }
-    res_path[index_res_path] = '\0';
-    struct stat st;
-    if (stat(res_path, &st) != 0)
+
+    size_t root_length = strlen(root);
+
+    if (strncmp(root, path, root_length) != 0)
     {
-        free(res_path);
+        return 0;
+    }
+
+    if (path[root_length] == '\0' || path[root_length] == '/')
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int resolve_default_file(struct config *config, const char *root,
+                                char *path)
+{
+    const char *default_file = config->servers->default_file;
+
+    if (default_file[0] == '/' || contains_parent_directory(default_file))
+    {
+        return 403;
+    }
+
+    char complete_path[PATH_MAX];
+
+    if (build_path(path, default_file, complete_path) < 0)
+    {
         return 404;
     }
-    if (S_ISDIR(st.st_mode) != 0)
-    {
-        size_t len_path = strlen(res_path);
-        if (res_path[len_path - 1] != '/')
-        {
-            char *temps = realloc(res_path, len_path + 2);
-            if (temps == NULL)
-            {
-                free(res_path);
-                return -1;
-            }
-            res_path = temps;
-            res_path[len_path] = '/';
-            len_path++;
-            res_path[len_path] = '\0';
-        }
-        size_t len_default_file = strlen(config->servers->default_file);
-        char *tmp = realloc(res_path, len_path + len_default_file + 1);
-        if (tmp == NULL)
-        {
-            free(res_path);
-            return -1;
-        }
-        res_path = tmp;
 
-        for (size_t i = 0; i < len_default_file; i++)
-        {
-            res_path[len_path + i] = config->servers->default_file[i];
-        }
-        res_path[len_path + len_default_file] = '\0';
-        if (stat(res_path, &st) != 0)
-        {
-            free(res_path);
-            return 404;
-        }
-    }
-    if (S_ISREG(st.st_mode) == 0)
+    int status = resolve_path(complete_path, path);
+
+    if (status == 200 && path_is_inside_root(root, path) == 0)
     {
-        free(res_path);
         return 403;
     }
-    int fd = open(res_path, O_RDONLY);
-    if (fd < 0)
+
+    return status;
+}
+
+static int add_default_file(struct config *config, const char *root, char *path)
+{
+    struct stat information;
+
+    if (stat(path, &information) != 0)
     {
-        free(res_path);
+        return 404;
+    }
+
+    if (S_ISDIR(information.st_mode) == 0)
+    {
+        return 200;
+    }
+
+    return resolve_default_file(config, root, path);
+}
+
+static int open_file(struct answer_http *answer, const char *path)
+{
+    struct stat information;
+
+    if (stat(path, &information) != 0)
+    {
+        return 404;
+    }
+
+    if (S_ISREG(information.st_mode) == 0)
+    {
         return 403;
     }
-    answer->file_fd = fd;
-    answer->content_length = st.st_size;
+
+    int file = open(path, O_RDONLY);
+
+    if (file < 0)
+    {
+        return 403;
+    }
+
+    answer->file_fd = file;
+    answer->content_length = information.st_size;
     answer->flag_content = 1;
-    free(res_path);
+
     return 200;
+}
+
+static int resolve_request_path(struct request_http *request, const char *root,
+                                char *resolved_path)
+{
+    if (request->path[0] != '/' || contains_parent_directory(request->path))
+    {
+        return 403;
+    }
+
+    char complete_path[PATH_MAX];
+
+    if (build_path(root, request->path, complete_path) < 0)
+    {
+        return 404;
+    }
+
+    int status = resolve_path(complete_path, resolved_path);
+
+    if (status == 200 && path_is_inside_root(root, resolved_path) == 0)
+    {
+        return 403;
+    }
+
+    return status;
+}
+
+int find_path(struct request_http *request, struct answer_http *answer,
+              struct config *config)
+{
+    char root[PATH_MAX];
+
+    if (realpath(config->servers->root_dir, root) == NULL)
+    {
+        return -1;
+    }
+
+    char resolved_path[PATH_MAX];
+    int status = resolve_request_path(request, root, resolved_path);
+
+    if (status != 200)
+    {
+        return status;
+    }
+
+    status = add_default_file(config, root, resolved_path);
+
+    if (status != 200)
+    {
+        return status;
+    }
+
+    return open_file(answer, resolved_path);
 }
