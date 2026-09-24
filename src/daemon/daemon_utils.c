@@ -13,8 +13,8 @@ static int write_all(int file, const char *buffer, size_t size)
 
     while (written_total < size)
     {
-        ssize_t written = write(file, buffer + written_total,
-                                size - written_total);
+        ssize_t written =
+            write(file, buffer + written_total, size - written_total);
         if (written < 0 && errno == EINTR)
         {
             continue;
