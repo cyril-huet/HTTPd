@@ -4,6 +4,6 @@
 #include "../config/config.h"
 
 int init_server(char *ip, char *port);
-void run_server(int sockfd, struct config *config);
+int run_server(int sockfd, struct config *config);
 
 #endif /* ! SERVER_H */
