@@ -1,83 +1,104 @@
 #include "string.h"
 
-#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 
-struct string *string_create(const char *str, size_t size)
+struct string *string_create(const char *data, size_t size)
 {
-    struct string *res = malloc(sizeof(struct string));
-    if (res == NULL)
+    if (data == NULL && size > 0)
     {
         return NULL;
     }
-    res->size = size;
-    res->data = malloc(size * sizeof(char));
-    if (res->data == NULL)
+
+    struct string *string = malloc(sizeof(struct string));
+    if (string == NULL)
     {
-        free(res);
         return NULL;
     }
-    for (size_t i = 0; i < size; i++)
+
+    string->data = malloc(size + 1);
+    if (string->data == NULL)
     {
-        res->data[i] = str[i];
+        free(string);
+        return NULL;
     }
-    return res;
+
+    for (size_t index = 0; index < size; index++)
+    {
+        string->data[index] = data[index];
+    }
+
+    string->data[size] = '\0';
+    string->size = size;
+    return string;
 }
 
-int string_compare_n_str(const struct string *str1, const char *str2, size_t n)
+int string_compare_n_str(const struct string *string, const char *data,
+                         size_t size)
 {
-    size_t size_str = 0;
-
-    if (str1->size > n)
-    {
-        size_str = n;
-    }
-    else
-    {
-        size_str = str1->size;
-    }
-    size_t index = 0;
-    while (index != size_str)
-    {
-        if (str1->data[index] != str2[index])
-        {
-            return str1->data[index] - str2[index];
-        }
-        index++;
-    }
-    if (str1->size < n)
+    if (string == NULL || data == NULL)
     {
         return -1;
     }
+
+    size_t compared_size = string->size;
+    if (compared_size > size)
+    {
+        compared_size = size;
+    }
+
+    for (size_t index = 0; index < compared_size; index++)
+    {
+        if (string->data[index] != data[index])
+        {
+            return string->data[index] - data[index];
+        }
+    }
+
+    if (string->size < size)
+    {
+        return -1;
+    }
+
     return 0;
 }
 
-void string_concat_str(struct string *str, const char *to_concat, size_t size)
+void string_concat_str(struct string *string, const char *data, size_t size)
 {
-    if (size == 0)
+    if (string == NULL || data == NULL || size == 0)
     {
         return;
     }
-    str->data = realloc(str->data, str->size + size);
-    if (str->data == NULL)
+
+    if (size > SIZE_MAX - string->size)
     {
         return;
     }
-    size_t index = 0;
-    for (size_t i = str->size; i < size + str->size; i++)
+
+    size_t new_size = string->size + size;
+    char *new_data = realloc(string->data, new_size + 1);
+    if (new_data == NULL)
     {
-        str->data[i] = to_concat[index];
-        index++;
+        return;
     }
-    str->size += size;
+
+    for (size_t index = 0; index < size; index++)
+    {
+        new_data[string->size + index] = data[index];
+    }
+
+    new_data[new_size] = '\0';
+    string->data = new_data;
+    string->size = new_size;
 }
 
-void string_destroy(struct string *str)
+void string_destroy(struct string *string)
 {
-    if (str == NULL)
+    if (string == NULL)
     {
         return;
     }
-    free(str->data);
-    free(str);
+
+    free(string->data);
+    free(string);
 }
