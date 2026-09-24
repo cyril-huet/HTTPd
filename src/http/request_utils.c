@@ -7,93 +7,141 @@
 #include "../utils/string/string.h"
 #include "http_structs.h"
 
-char *my_strdup2(const char *str)
+static char lowercase(char character)
 {
-    size_t len = strlen(str);
-    char *res = malloc(sizeof(char) * (len + 1));
-    if (res == NULL)
-        return NULL;
-    memcpy(res, str, len);
-    res[len] = '\0';
-    return res;
+    if (character >= 'A' && character <= 'Z')
+    {
+        return character + ('a' - 'A');
+    }
+
+    return character;
 }
 
-int compare_servername(char *parcours, struct string *name_server)
+char *my_strdup2(const char *string)
 {
-    size_t index = 0;
-    while (parcours[index] != '\0')
+    size_t length = strlen(string);
+    char *copy = malloc(length + 1);
+    if (copy == NULL)
     {
-        index++;
+        return NULL;
     }
-    if (index != name_server->size)
+
+    for (size_t index = 0; index < length; index++)
     {
-        return 0;
+        copy[index] = string[index];
     }
-    for (size_t i = 0; i < index; i++)
+
+    copy[length] = '\0';
+    return copy;
+}
+
+static int server_name_matches(const char *host, struct string *server_name)
+{
+    for (size_t index = 0; index < server_name->size; index++)
     {
-        if (parcours[i] != name_server->data[i])
+        if (lowercase(host[index]) != lowercase(server_name->data[index]))
         {
             return 0;
         }
     }
+
+    return 1;
+}
+
+int compare_servername(char *host, struct string *server_name)
+{
+    if (strlen(host) != server_name->size)
+    {
+        return 0;
+    }
+
+    return server_name_matches(host, server_name);
+}
+
+static int text_matches(const char *host, size_t start, const char *expected)
+{
+    size_t index = 0;
+    while (expected[index] != '\0')
+    {
+        if (host[start + index] != expected[index])
+        {
+            return 0;
+        }
+
+        index++;
+    }
+
     return 1;
 }
 
 int compare_ip(char *host, char *ip, char *port)
 {
-    size_t len = 0;
-    len += strlen(ip);
-    len += 1;
-    len += strlen(port);
-    char *compare = malloc(sizeof(char) * (len + 1));
-    if (compare == NULL)
-    {
-        return -1;
-    }
-    size_t index = 0;
-    while (index < strlen(ip))
-    {
-        compare[index] = ip[index];
-        index++;
-    }
-    compare[index] = ':';
-    index++;
-    while (index < strlen(ip) + 1 + strlen(port))
-    {
-        compare[index] = port[index - strlen(ip) - 1];
-        index++;
-    }
-    compare[index] = '\0';
+    size_t ip_length = strlen(ip);
+    size_t port_length = strlen(port);
+    size_t expected_length = ip_length + port_length + 1;
 
-    if (index != strlen(host))
+    if (strlen(host) != expected_length)
     {
-        free(compare);
         return -1;
     }
-    int res = strcmp(compare, host);
-    free(compare);
-    return res;
+
+    if (text_matches(host, 0, ip) == 0 || host[ip_length] != ':')
+    {
+        return -1;
+    }
+
+    if (text_matches(host, ip_length + 1, port) == 0)
+    {
+        return -1;
+    }
+
+    return 0;
 }
 
-int valide_request(struct request_http *request, struct config *config)
+static int compare_servername_with_port(const char *host,
+                                        struct string *server_name,
+                                        const char *port)
 {
-    if (request->host == NULL)
+    size_t port_length = strlen(port);
+    size_t expected_length = server_name->size + port_length + 1;
+
+    if (strlen(host) != expected_length)
     {
         return 0;
     }
 
-    char *parcours = request->host;
-    struct string *name_server = config->servers->server_name;
-    if (compare_servername(parcours, name_server))
+    if (server_name_matches(host, server_name) == 0
+        || host[server_name->size] != ':')
+    {
+        return 0;
+    }
+
+    return text_matches(host, server_name->size + 1, port);
+}
+
+int valide_request(struct request_http *request, struct config *config)
+{
+    if (request == NULL || request->host == NULL || config == NULL
+        || config->servers == NULL)
+    {
+        return 0;
+    }
+
+    char *host = request->host;
+    struct server_config *server = config->servers;
+
+    if (compare_servername(host, server->server_name) == 1
+        || compare_servername_with_port(host, server->server_name, server->port)
+            == 1)
     {
         return 1;
     }
 
-    if (strcmp(parcours, config->servers->ip) == 0)
+    if (strcmp(host, server->ip) == 0
+        || compare_ip(host, server->ip, server->port) == 0)
+    {
         return 1;
-
-    if (compare_ip(parcours, config->servers->ip, config->servers->port) == 0)
-        return 1;
+    }
 
     return 0;
 }
