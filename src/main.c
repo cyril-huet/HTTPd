@@ -101,9 +101,16 @@ int main(int argc, char *argv[])
 
     printf("Server started on http://%s:%s\n", config->servers->ip,
            config->servers->port);
-    run_server(server_socket, config);
+    int server_status = run_server(server_socket, config);
 
     close(server_socket);
     config_destroy(config);
+
+    if (server_status < 0)
+    {
+        return 1;
+    }
+
     return 0;
 }
+
