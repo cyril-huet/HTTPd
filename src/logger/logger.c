@@ -3,46 +3,52 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "logger_utils.h"
 
-struct logger *init_logger(struct config *config)
+static int open_logger_stream(struct logger *logger, struct config *config)
 {
-    struct logger *res = malloc(sizeof(struct logger));
-    if (res == NULL)
-    {
-        return NULL;
-    }
+    logger->stream = NULL;
+    logger->flag = 0;
 
-    res->server_name = to_string(config->servers->server_name);
-    if (res->server_name == NULL)
-    {
-        free(res);
-        return NULL;
-    }
     if (config->log == false)
     {
-        res->flag = 0;
-        res->stream = NULL;
-        return res;
+        return 0;
     }
 
-    if (config->log_file != NULL)
+    logger->flag = 1;
+    if (config->log_file == NULL)
     {
-        res->stream = fopen(config->log_file, "a");
-        if (res->stream == NULL)
-        {
-            free(res->server_name);
-            free(res);
-            return NULL;
-        }
-        res->flag = 1;
-        return res;
+        logger->stream = stdout;
+        return 0;
     }
-    res->flag = 1;
-    res->stream = stdout;
-    return res;
+
+    logger->stream = fopen(config->log_file, "a");
+    if (logger->stream == NULL)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+struct logger *init_logger(struct config *config)
+{
+    struct logger *logger = malloc(sizeof(struct logger));
+    if (logger == NULL)
+    {
+        return NULL;
+    }
+
+    logger->server_name = to_string(config->servers->server_name);
+    if (logger->server_name == NULL || open_logger_stream(logger, config) < 0)
+    {
+        free(logger->server_name);
+        free(logger);
+        return NULL;
+    }
+
+    return logger;
 }
 
 void log_close(struct logger *logger)
@@ -56,112 +62,97 @@ void log_close(struct logger *logger)
     {
         fclose(logger->stream);
     }
-    free(logger->server_name);
 
+    free(logger->server_name);
     free(logger);
+}
+
+static int logger_is_enabled(struct logger *logger)
+{
+    if (logger == NULL || logger->flag == 0 || logger->stream == NULL)
+    {
+        return 0;
+    }
+
+    return 1;
 }
 
 void logger_request(struct logger *logger, struct request_http *request,
                     char *client_ip)
 {
-    if (logger == NULL || logger->flag == 0 || logger->stream == NULL)
+    if (logger_is_enabled(logger) == 0)
     {
         return;
     }
 
-    char buffer[512];
-    size_t len = 0;
-
-    char *dates = date_log();
-    if (dates == NULL)
+    char *log_date = date_log();
+    if (log_date == NULL)
     {
         return;
     }
-
-    len += append(buffer + len, dates);
-    len += append(buffer + len, " [");
-    len += append(buffer + len, logger->server_name);
-    len += append(buffer + len, "] received ");
 
     if (request == NULL || request->method == NULL || request->path == NULL)
     {
-        len += append(buffer + len, "Bad Request from ");
-        len += append(buffer + len, client_ip);
+        fprintf(logger->stream, "%s [%s] received Bad Request from %s\n",
+                log_date, logger->server_name, client_ip);
     }
     else
     {
-        len += append(buffer + len, request->method);
-        len += append(buffer + len, " on '");
-        len += append(buffer + len, request->path);
-        len += append(buffer + len, "' from ");
-        len += append(buffer + len, client_ip);
+        fprintf(logger->stream, "%s [%s] received %s on '%s' from %s\n",
+                log_date, logger->server_name, request->method, request->path,
+                client_ip);
     }
 
-    buffer[len] = '\n';
-    len++;
+    fflush(logger->stream);
+    free(log_date);
+}
 
-    int fd = fileno(logger->stream);
-    if (write(fd, buffer, len) < 0)
+static const char *method_for_log(struct answer_http *answer,
+                                  struct request_http *request)
+{
+    if (answer->status_code == 405 || request == NULL
+        || request->method == NULL)
     {
+        return "UNKNOWN";
     }
-    free(dates);
+
+    return request->method;
+}
+
+static const char *path_for_log(struct request_http *request)
+{
+    if (request == NULL || request->path == NULL)
+    {
+        return "";
+    }
+
+    return request->path;
 }
 
 void logger_response(struct logger *logger, struct answer_http *answer,
                      struct request_http *request, char *client_ip)
 {
-    if (logger == NULL || logger->flag == 0 || logger->stream == NULL)
+    if (logger_is_enabled(logger) == 0 || answer == NULL)
     {
         return;
-    }
-    char buffer[512];
-    size_t len = 0;
-    char *dates = date_log();
-    if (dates == NULL)
-    {
-        return;
-    }
-    len += append(buffer + len, dates);
-    len += append(buffer + len, " [");
-    len += append(buffer + len, logger->server_name);
-    len += append(buffer + len, "] responding with ");
-    int status = answer->status_code;
-    char code_str[12];
-    my_itoa_log(answer->status_code, code_str);
-    len += append(buffer + len, code_str);
-    len += append(buffer + len, " to ");
-    len += append(buffer + len, client_ip);
-    if (status == 400)
-    {
-        buffer[len] = '\n';
-        len++;
-        if (write(fileno(logger->stream), buffer, len) < 0)
-        {
-        }
-        free(dates);
-        return;
-    }
-    len += append(buffer + len, " for ");
-    if (status == 405 || request == NULL || request->method == NULL)
-    {
-        len += append(buffer + len, "UNKNOWN");
-    }
-    else
-    {
-        len += append(buffer + len, request->method);
-    }
-    len += append(buffer + len, " on '");
-
-    if (request != NULL && request->path != NULL)
-    {
-        len += append(buffer + len, request->path);
     }
 
-    len += append(buffer + len, "'");
-    buffer[len] = '\n';
-    len++;
-    if (write(fileno(logger->stream), buffer, len) < 0)
+    char *log_date = date_log();
+    if (log_date == NULL)
     {
+        return;
     }
-    free(dates);
+
+    fprintf(logger->stream, "%s [%s] responding with %d to %s", log_date,
+            logger->server_name, answer->status_code, client_ip);
+
+    if (answer->status_code != 400)
+    {
+        fprintf(logger->stream, " for %s on '%s'",
+                method_for_log(answer, request), path_for_log(request));
+    }
+
+    fprintf(logger->stream, "\n");
+    fflush(logger->stream);
+    free(log_date);
 }
