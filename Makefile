@@ -1,39 +1,57 @@
+# Executable
+NAME = httpd
+
+# Compilation
 CC = gcc
-CFLAGS = -std=c99 -pedantic -Werror -Wall -Wextra -Wvla
+CFLAGS = -std=c99 -pedantic -Wall -Wextra -Werror -Wvla
 
-TARGET = httpd
+# Source files
+SRC = src/main.c \
+      src/config/config.c \
+      src/config/config_utils.c \
+      src/daemon/daemon.c \
+      src/daemon/daemon_utils.c \
+      src/server/server.c \
+      src/server/server_utils.c \
+      src/logger/logger.c \
+      src/logger/logger_utils.c \
+      src/utils/string/string.c \
+      src/http/request.c \
+      src/http/request_line.c \
+      src/http/request_headers.c \
+      src/http/request_body.c \
+      src/http/request_utils.c \
+      src/http/answer_core.c \
+      src/http/answer_path.c \
+      src/http/answer_format.c
 
-OBJS = \
-    src/main.o \
-    src/config/config.o \
-    src/config/config_utils.o \
-    src/daemon/daemon.o \
-    src/daemon/daemon_utils.o \
-    src/server/server.o \
-    src/server/server_utils.o \
-    src/logger/logger.o \
-    src/logger/logger_utils.o \
-    src/utils/string/string.o \
-    src/http/request.o \
-    src/http/request_line.o \
-    src/http/request_headers.o \
-    src/http/request_body.o \
-    src/http/request_utils.o \
-    src/http/answer_core.o \
-    src/http/answer_path.o \
-    src/http/answer_format.o
+OBJ = $(SRC:.c=.o)
 
+# Build the project
+all: $(NAME)
 
-all: $(TARGET)
+$(NAME): $(OBJ)
+	$(CC) $(OBJ) -o $(NAME)
 
-$(TARGET): $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS)
+# Compile each source file
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-check:
-	-pytest -vv
-	./tests/clean.sh
+# Run the test suite
+check: $(NAME)
+	python3 -m pytest -v tests
 
+test: check
+
+# Remove object files
 clean:
-	$(RM) $(TARGET) $(OBJS)
+	$(RM) $(OBJ)
 
+# Remove every generated file
+fclean: clean
+	$(RM) $(NAME)
 
+# Rebuild the project
+re: fclean all
+
+.PHONY: all check test clean fclean re
