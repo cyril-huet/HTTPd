@@ -43,6 +43,9 @@ check: $(NAME)
 
 test: check
 
+format:
+	find src tests -type f \( -name "*.h" -o -name "*.c" \) -exec clang-format -i {} +
+
 # Remove object files
 clean:
 	$(RM) $(OBJ)

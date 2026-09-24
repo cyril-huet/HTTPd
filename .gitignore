@@ -8,7 +8,6 @@ test_game
 
 # trashfiles
 *.o
-.clang-format
 
 
 # Python
