@@ -7,27 +7,28 @@
 #include "answer_format.h"
 #include "answer_path.h"
 #include "http_structs.h"
-#include "request.h"
 #include "request_utils.h"
 
 struct answer_http *init_answer(void)
 {
-    struct answer_http *res = malloc(sizeof(struct answer_http));
-    if (res == NULL)
+    struct answer_http *answer = malloc(sizeof(struct answer_http));
+    if (answer == NULL)
     {
         return NULL;
     }
-    res->version = NULL;
-    res->status_code = 0;
-    res->reason_phrase = NULL;
-    res->date = NULL;
-    res->content_length = 0;
-    res->flag_content = 0;
-    res->body = NULL;
-    res->connection = 0;
-    res->file_fd = -1;
-    return res;
+
+    answer->version = NULL;
+    answer->status_code = 0;
+    answer->reason_phrase = NULL;
+    answer->date = NULL;
+    answer->content_length = 0;
+    answer->flag_content = 0;
+    answer->body = NULL;
+    answer->connection = 0;
+    answer->file_fd = -1;
+    return answer;
 }
+
 void init_status_code(struct answer_http *answer, int code)
 {
     answer->version = my_strdup2("HTTP/1.1");
@@ -41,106 +42,113 @@ char *wich_reason_phrase(int code)
     {
     case 200:
         return "OK";
-        break;
     case 400:
         return "Bad Request";
-        break;
     case 403:
         return "Forbidden";
-        break;
     case 404:
         return "Not Found";
-        break;
     case 405:
         return "Method Not Allowed";
-        break;
     case 505:
         return "HTTP Version Not Supported";
-        break;
     default:
         return "Error";
     }
 }
-int build_answer(struct answer_http *answer, struct config *config,
-                 struct request_http *request)
+
+static void close_answer_file(struct answer_http *answer)
 {
-    answer->status_code = -1;
-    answer->reason_phrase = NULL;
-    answer->date = date();
-    answer->content_length = 0;
-    answer->flag_content = 0;
-    answer->body = NULL;
-    answer->connection = 0;
-    answer->file_fd = -1;
+    if (answer->file_fd != -1)
+    {
+        close(answer->file_fd);
+        answer->file_fd = -1;
+    }
+}
+
+static int request_status(struct request_http *request, struct config *config)
+{
     if (strcmp(request->method, "GET") != 0
         && strcmp(request->method, "HEAD") != 0)
     {
-        init_status_code(answer, 405);
         return 405;
     }
+
     if (strcmp(request->version, "HTTP/1.1") != 0)
     {
-        init_status_code(answer, 505);
         return 505;
     }
-    if (request->host == NULL)
+
+    if (request->host == NULL || valide_request(request, config) == 0)
     {
-        init_status_code(answer, 400);
-        return 400;
-    }
-    if (valide_request(request, config) == 0)
-    {
-        init_status_code(answer, 400);
         return 400;
     }
 
-    int status = find_path(request, answer, config);
-    if (status != 200)
-    {
-        init_status_code(answer, status);
-        if (answer->file_fd != -1)
-        {
-            close(answer->file_fd);
-            answer->file_fd = -1;
-        }
-        return status;
-    }
-    else
-    {
-        init_status_code(answer, 200);
-    }
-    if (strcmp(request->method, "HEAD") == 0)
-    {
-        answer->flag_content = 0;
-        if (answer->file_fd != -1)
-        {
-            close(answer->file_fd);
-            answer->file_fd = -1;
-        }
-    }
     return 200;
 }
+
+static int save_status(struct answer_http *answer, int status)
+{
+    init_status_code(answer, status);
+    if (answer->version == NULL)
+    {
+        return -1;
+    }
+
+    return status;
+}
+
+static int finish_answer(struct answer_http *answer,
+                         struct request_http *request, int status)
+{
+    if (status != 200)
+    {
+        close_answer_file(answer);
+    }
+
+    if (save_status(answer, status) < 0)
+    {
+        close_answer_file(answer);
+        return -1;
+    }
+
+    if (status == 200 && strcmp(request->method, "HEAD") == 0)
+    {
+        answer->flag_content = 0;
+        close_answer_file(answer);
+    }
+
+    return status;
+}
+
+int build_answer(struct answer_http *answer, struct config *config,
+                 struct request_http *request)
+{
+    answer->date = date();
+    if (answer->date == NULL)
+    {
+        return -1;
+    }
+
+    int status = request_status(request, config);
+    if (status == 200)
+    {
+        status = find_path(request, answer, config);
+    }
+
+    return finish_answer(answer, request, status);
+}
+
 void free_answer(struct answer_http *answer)
 {
     if (answer == NULL)
     {
         return;
     }
-    if (answer->version != NULL)
-    {
-        free(answer->version);
-    }
-    if (answer->date != NULL)
-    {
-        free(answer->date);
-    }
-    if (answer->body != NULL)
-    {
-        free(answer->body);
-    }
-    if (answer->file_fd != -1)
-    {
-        close(answer->file_fd);
-    }
+
+    free(answer->version);
+    free(answer->date);
+    free(answer->body);
+    close_answer_file(answer);
     free(answer);
 }
