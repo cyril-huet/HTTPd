@@ -1,109 +1,142 @@
 #define _POSIX_C_SOURCE 200809L
 #include "daemon_utils.h"
 
+#include <errno.h>
 #include <fcntl.h>
-#include <stdlib.h>
+#include <limits.h>
+#include <stdio.h>
 #include <unistd.h>
 
-int int_len(int a)
+static int write_all(int file, const char *buffer, size_t size)
 {
-    if (a == 0)
+    size_t written_total = 0;
+
+    while (written_total < size)
     {
-        return 1;
+        ssize_t written = write(file, buffer + written_total,
+                                size - written_total);
+        if (written < 0 && errno == EINTR)
+        {
+            continue;
+        }
+
+        if (written <= 0)
+        {
+            return -1;
+        }
+
+        written_total += written;
     }
-    int res = 0;
-    while (a > 0)
-    {
-        res++;
-        a /= 10;
-    }
-    return res;
+
+    return 0;
 }
 
 int write_pid(char *file)
 {
-    int fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
+    if (file == NULL)
     {
         return -1;
     }
-    int pid = getpid();
-    int taille = int_len(pid);
-    char *str_pid = malloc(sizeof(char) * (taille + 2));
-    if (str_pid == NULL)
-    {
-        close(fd);
-        return -1;
-    }
-    for (int i = 0; i < taille; i++)
-    {
-        char temps = pid % 10 + '0';
-        str_pid[taille - i - 1] = temps;
-        pid = pid / 10;
-    }
-    str_pid[taille] = '\n';
-    str_pid[taille + 1] = '\0';
 
-    if (write(fd, str_pid, taille + 1) < 0)
+    int descriptor = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (descriptor < 0)
     {
+        return -1;
     }
-    close(fd);
-    free(str_pid);
+
+    char content[32];
+    int length = snprintf(content, sizeof(content), "%d\n", getpid());
+    if (length < 0 || length >= 32
+        || write_all(descriptor, content, length) < 0)
+    {
+        close(descriptor);
+        return -1;
+    }
+
+    close(descriptor);
     return 0;
 }
-int file_size(char *file)
+
+static int read_pid_content(int descriptor, char *content, size_t capacity)
 {
-    int fd = open(file, O_RDONLY);
-    if (fd < 0)
+    size_t length = 0;
+    while (length + 1 < capacity)
+    {
+        ssize_t bytes_read = read(descriptor, content + length, 1);
+        if (bytes_read < 0 && errno == EINTR)
+        {
+            continue;
+        }
+
+        if (bytes_read < 0)
+        {
+            return -1;
+        }
+
+        if (bytes_read == 0 || content[length] == '\n')
+        {
+            break;
+        }
+
+        length++;
+    }
+
+    content[length] = '\0';
+    if (length == 0)
     {
         return -1;
     }
 
-    int res = 0;
-    char c;
-    while (read(fd, &c, 1) == 1)
+    return 0;
+}
+
+static int parse_pid_content(const char *content)
+{
+    int pid = 0;
+    for (size_t index = 0; content[index] != '\0'; index++)
     {
-        res++;
+        if (content[index] < '0' || content[index] > '9')
+        {
+            return -1;
+        }
+
+        int digit = content[index] - '0';
+        if (pid > (INT_MAX - digit) / 10)
+        {
+            return -1;
+        }
+
+        pid = pid * 10 + digit;
     }
 
-    close(fd);
-    return res;
+    if (pid == 0)
+    {
+        return -1;
+    }
+
+    return pid;
 }
+
 int read_pid(char *file)
 {
-    int size = file_size(file);
-    if (size <= 0)
-    {
-        return -1;
-    }
-    int fd = open(file, O_RDONLY);
-    if (fd < 0)
+    if (file == NULL)
     {
         return -1;
     }
 
-    char *res = malloc(sizeof(char) * (size + 1));
-    if (res == NULL)
+    int descriptor = open(file, O_RDONLY);
+    if (descriptor < 0)
     {
-        close(fd);
         return -1;
     }
-    int r = read(fd, res, size);
-    if (r <= 0)
+
+    char content[32];
+    int status = read_pid_content(descriptor, content, sizeof(content));
+    close(descriptor);
+    if (status < 0)
     {
-        free(res);
-        close(fd);
         return -1;
     }
-    close(fd);
-    int res_pid = 0;
-    for (int i = 0; i < size; i++)
-    {
-        if (res[i] >= '0' && res[i] <= '9')
-        {
-            res_pid = res_pid * 10 + (res[i] - '0');
-        }
-    }
-    free(res);
-    return res_pid;
+
+    return parse_pid_content(content);
 }
